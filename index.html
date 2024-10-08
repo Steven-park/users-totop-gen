@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOTP Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsSHA/2.4.2/sha.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(to right, #4facfe, #00f2fe);
+        }
+        .totp-container {
+            text-align: center;
+            padding: 40px;
+            border-radius: 15px;
+            background-color: white;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            width: 100%;
+        }
+        .username {
+            font-size: 24px;
+            color: #555; /* Slightly lighter color for the username */
+            margin-bottom: 10px; /* Space between username and TOTP code */
+        }
+        .totp-code {
+            font-size: 64px;
+            font-weight: bold;
+            margin: 20px 0;
+            color: #333;
+        }
+        .countdown {
+            margin-top: 20px; /* Space between code and countdown */
+            position: relative;
+        }
+        canvas {
+            border-radius: 50%; /* Make canvas circular */
+            display: block; /* Center canvas */
+            margin: 0 auto; /* Center horizontally */
+        }
+        .countdown-number {
+            font-size: 24px;
+            margin-top: 10px; /* Space between canvas and number */
+            color: #333; /* Countdown number color */
+            text-align: center; /* Center number */
+        }
+        @media (max-width: 600px) {
+            .totp-code {
+                font-size: 48px; /* Adjust size for smaller screens */
+            }
+            .countdown-number {
+                font-size: 20px; /* Adjust size for smaller screens */
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="totp-container">
+        <div class="username">tailscaleusers</div> <!-- Username Display -->
+        <div class="totp-code" id="totpCode">Loading...</div>
+        <div class="countdown" id="countdownContainer">
+            <canvas id="countdownCanvas" width="100" height="100"></canvas>
+            <div class="countdown-number" id="countdownDisplay">30</div>
+        </div>
+    </div>
+
+    <script>
+        const secret = "TH36BGDAZX3XHLRM"; // Your base32 encoded secret key
+        const timeStep = 30; // 30 seconds
+
+        // Base32 decoding function
+        function base32Decode(base32) {
+            const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+            let bits = '';
+            for (let char of base32) {
+                const value = base32Chars.indexOf(char);
+                if (value === -1) continue; // Ignore invalid characters
+                bits += value.toString(2).padStart(5, '0');
+            }
+            const bytes = [];
+            for (let i = 0; i < bits.length; i += 8) {
+                if (i + 8 <= bits.length) {
+                    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+                }
+            }
+            return bytes; // Return as a regular array of bytes
+        }
+
+        function getCurrentTimeStep() {
+            return Math.floor(Date.now() / 1000 / timeStep);
+        }
+
+        function padDigits(number, digits) {
+            return number.toString().padStart(digits, '0');
+        }
+
+        function generateTOTP() {
+            const timeStep = getCurrentTimeStep();
+            const decodedSecret = base32Decode(secret); // Get decoded secret as an array
+
+            // Create HMAC-SHA1 from secret and time step
+            const shaObj = new jsSHA("SHA-1", "ARRAYBUFFER");
+            shaObj.setHMACKey(new Uint8Array(decodedSecret), "ARRAYBUFFER"); // Use Uint8Array
+            const buffer = new Uint8Array(8);
+            buffer[7] = timeStep & 0xff;
+            buffer[6] = (timeStep >> 8) & 0xff;
+            buffer[5] = (timeStep >> 16) & 0xff;
+            buffer[4] = (timeStep >> 24) & 0xff;
+
+            shaObj.update(buffer);
+            const hmac = shaObj.getHMAC("ARRAYBUFFER"); // Get HMAC as an ArrayBuffer
+
+            // Dynamic truncation
+            const offset = new Uint8Array(hmac)[hmac.byteLength - 1] & 0xf; // Adjusted for ArrayBuffer
+            const binary =
+                ((new Uint8Array(hmac)[offset] & 0x7f) << 24) |
+                ((new Uint8Array(hmac)[offset + 1] & 0xff) << 16) |
+                ((new Uint8Array(hmac)[offset + 2] & 0xff) << 8) |
+                (new Uint8Array(hmac)[offset + 3] & 0xff);
+
+            // Get the last 6 digits of the OTP
+            const otp = binary % 10 ** 6;
+            return padDigits(otp, 6);
+        }
+
+        function drawCircularCountdown(remainingTime) {
+            const canvas = document.getElementById('countdownCanvas');
+            const ctx = canvas.getContext('2d');
+            const radius = canvas.width / 2;
+            const strokeWidth = 10;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas
+            ctx.beginPath();
+            ctx.arc(radius, radius, radius - strokeWidth, 0, 2 * Math.PI); // Draw full circle
+            ctx.lineWidth = strokeWidth;
+            ctx.strokeStyle = '#e0e0e0'; // Background circle color
+            ctx.stroke();
+
+            // Calculate the end angle based on remaining time
+            const endAngle = (remainingTime / timeStep) * 2 * Math.PI - (Math.PI / 2);
+            ctx.beginPath();
+            ctx.arc(radius, radius, radius - strokeWidth, -Math.PI / 2, endAngle, false); // Draw countdown arc
+            ctx.lineWidth = strokeWidth;
+            ctx.strokeStyle = remainingTime <= 5 ? 'red' : '#4caf50'; // Change color if <= 5 seconds
+            ctx.stroke();
+        }
+
+        function updateTOTP() {
+            const code = generateTOTP();
+            document.getElementById('totpCode').innerText = code;
+
+            // Update countdown
+            const currentTime = Math.floor(Date.now() / 1000);
+            const timeLeft = timeStep - (currentTime % timeStep);
+            document.getElementById('countdownDisplay').innerText = timeLeft; // Update numeric countdown
+            drawCircularCountdown(timeLeft); // Draw the circular countdown
+
+            // Schedule next update
+            setTimeout(updateTOTP, 1000); // Update every second
+        }
+
+        // Initialize TOTP generation
+        updateTOTP();
+    </script>
+</body>
+</html>
